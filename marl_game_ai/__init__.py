@@ -1,0 +1,2 @@
+"""Cooperative puzzle MARL project."""
+

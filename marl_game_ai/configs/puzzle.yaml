@@ -1,0 +1,19 @@
+env:
+  level: basic
+  max_steps: 120
+
+train:
+  episodes: 300
+
+algorithm:
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_coef: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.01
+  lr: 0.0003
+  update_epochs: 4
+  minibatch_size: 256
+  hidden_dim: 128
+  device: cpu
+
