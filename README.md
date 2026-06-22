@@ -21,7 +21,7 @@ marl_game_ai/
 在工作区根目录运行：
 
 ```bash
-python -m pip install -r marl_game_ai/requirements.txt
+python -m pip install -r requirements.txt
 python -m marl_game_ai.evaluate --algorithm rule --episodes 3 --out-dir outputs/eval
 python -m marl_game_ai.visualizer.pygame_viewer --replay outputs/eval/rule_replay.json
 ```
