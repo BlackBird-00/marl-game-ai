@@ -41,15 +41,6 @@ python -m marl_game_ai.evaluate --algorithm ippo --model outputs/ippo/ippo_best.
 ```
 
 如果 Windows/Anaconda 环境出现 `torch` DLL 加载错误，随机策略、规则策略和 pygame 回放仍可运行；训练 IPPO/MAPPO 前需要先修复 PyTorch 安装。若遇到 `NumPy 2.x` 与 `matplotlib` 或 `torch` 的兼容报错，先按 `requirements.txt` 安装 `numpy<2`。
-
-## 上传到 GitHub
-
-本目录已经适合初始化为 Git 仓库，`outputs/`、模型权重和缓存不会被提交。首次关联远程仓库时，在工作区根目录执行：
-
-```bash
-git remote add origin https://github.com/<your-name>/<repo-name>.git
-git branch -M main
-git push -u origin main
 ```
 
 ## 环境设定
