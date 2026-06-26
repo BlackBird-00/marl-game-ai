@@ -10,7 +10,13 @@ from marl_game_ai.envs import CoopPuzzleEnv
 from marl_game_ai.utils import ensure_dir, save_json
 
 
-def run_episode(env: CoopPuzzleEnv, policy, algorithm: str, deterministic: bool = True):
+def run_episode(
+    env: CoopPuzzleEnv,
+    policy,
+    algorithm: str,
+    deterministic: bool = True,
+    temperature: float = 1.0,
+):
     observations, _ = env.reset()
     total_return = 0.0
     success = False
@@ -19,9 +25,18 @@ def run_episode(env: CoopPuzzleEnv, policy, algorithm: str, deterministic: bool 
         if algorithm == "random" or algorithm == "rule":
             actions = policy.act(env, observations)
         elif algorithm == "ippo":
-            actions, _, _ = policy.act(observations, deterministic=deterministic)
+            actions, _, _ = policy.act(
+                observations,
+                deterministic=deterministic,
+                temperature=temperature,
+            )
         elif algorithm == "mappo":
-            actions, _, _ = policy.act(observations, env.state(), deterministic=deterministic)
+            actions, _, _ = policy.act(
+                observations,
+                env.state(),
+                deterministic=deterministic,
+                temperature=temperature,
+            )
         else:
             raise ValueError(algorithm)
         observations, rewards, terminations, truncations, infos = env.step(actions)
@@ -48,6 +63,17 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument("--seed", type=int, default=9)
     parser.add_argument("--out-dir", default="outputs/eval")
+    parser.add_argument(
+        "--stochastic",
+        action="store_true",
+        help="Sample actions from the learned PPO policy instead of taking argmax.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Sampling temperature used with --stochastic; lower values reduce wandering.",
+    )
     args = parser.parse_args()
 
     env = CoopPuzzleEnv(level=args.level, max_steps=args.max_steps, seed=args.seed)
@@ -75,17 +101,27 @@ def main() -> None:
     results = []
     last_trajectory = []
     for episode in range(args.episodes):
-        result = run_episode(env, policy, args.algorithm)
+        result = run_episode(
+            env,
+            policy,
+            args.algorithm,
+            deterministic=not args.stochastic,
+            temperature=args.temperature,
+        )
         last_trajectory = result.pop("trajectory")
         result["episode"] = episode + 1
         results.append(result)
     out_dir = ensure_dir(args.out_dir)
     save_json(results, Path(out_dir) / f"{args.algorithm}_summary.json")
     save_json(last_trajectory, Path(out_dir) / f"{args.algorithm}_replay.json")
+    successful_steps = [r["steps"] for r in results if r["success"]]
+    success_steps_text = f"{np.mean(successful_steps):.1f}" if successful_steps else "n/a"
     print(
-        f"{args.algorithm}: success_rate={np.mean([r['success'] for r in results]):.2f}, "
+        f"{args.algorithm} ({'stochastic' if args.stochastic else 'deterministic'}): "
+        f"success_rate={np.mean([r['success'] for r in results]):.2f}, "
         f"avg_return={np.mean([r['return'] for r in results]):.2f}, "
-        f"avg_steps={np.mean([r['steps'] for r in results]):.1f}"
+        f"avg_steps={np.mean([r['steps'] for r in results]):.1f}, "
+        f"avg_success_steps={success_steps_text}"
     )
     print(f"Saved summary and replay to: {out_dir}")
 

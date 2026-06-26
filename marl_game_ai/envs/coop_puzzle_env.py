@@ -104,6 +104,7 @@ class CoopPuzzleEnv:
         self.agent_positions: Dict[str, Position] = {}
         self.key_taken = False
         self.door_open = False
+        self.door_ever_opened = False
         self.step_count = 0
         self.last_stats = StepStats()
         self.trajectory: List[dict] = []
@@ -147,6 +148,7 @@ class CoopPuzzleEnv:
         self.agent_positions = dict(self.start_positions)
         self.key_taken = False
         self.door_open = self._compute_door_open()
+        self.door_ever_opened = self.door_open
         self.step_count = 0
         self.last_stats = StepStats()
         self.trajectory = []
@@ -183,10 +185,11 @@ class CoopPuzzleEnv:
 
         self.agent_positions = proposed
         self.door_open = self._compute_door_open()
-        stats.opened_now = (not old_door_open) and self.door_open
+        stats.opened_now = (not old_door_open) and self.door_open and not self.door_ever_opened
+        self.door_ever_opened = self.door_ever_opened or self.door_open
 
         if self.key_pos is not None and not self.key_taken:
-            if any(pos == self.key_pos for pos in self.agent_positions.values()):
+            if self.agent_positions["agent_1"] == self.key_pos:
                 self.key_taken = True
                 stats.key_taken_now = True
 
@@ -212,6 +215,7 @@ class CoopPuzzleEnv:
     def observe(self, agent: str) -> np.ndarray:
         ar, ac = self.agent_positions.get(agent, self.start_positions[agent])
         other = [a for a in self.possible_agents if a != agent][0]
+        agent_index = self.possible_agents.index(agent)
         orow, ocol = self.agent_positions.get(other, self.start_positions[other])
         plate = self._nearest(self.pressure_plates, (ar, ac))
         door = self._nearest(self.doors, (ar, ac))
@@ -233,6 +237,8 @@ class CoopPuzzleEnv:
             float(self.door_open),
             float(self.key_taken),
             self.step_count / max(1, self.max_steps),
+            float(agent_index == 0),
+            float(agent_index == 1),
         ]
         return np.asarray(features, dtype=np.float32)
 
@@ -288,15 +294,15 @@ class CoopPuzzleEnv:
         return True
 
     def _compute_door_open(self) -> bool:
-        return any(pos in self.pressure_plates for pos in self.agent_positions.values())
+        return self.agent_positions.get("agent_0") in self.pressure_plates
 
     def _is_success(self) -> bool:
-        return self.key_taken and any(pos in self.goals for pos in self.agent_positions.values())
+        return self.key_taken and self.agent_positions.get("agent_1") in self.goals
 
     def _reward(self, stats: StepStats, old_progress: float) -> float:
-        reward = -0.02
+        reward = -0.10
         new_progress = self._team_progress_score()
-        reward += 0.08 * (new_progress - old_progress)
+        reward += 0.50 * (new_progress - old_progress)
         if stats.opened_now:
             reward += 1.0
         if stats.key_taken_now:
@@ -307,21 +313,17 @@ class CoopPuzzleEnv:
         if stats.collision:
             reward -= 0.2
         if stats.success:
-            reward += 8.0
+            speed_bonus = 8.0 * (1.0 - self.step_count / max(1, self.max_steps))
+            reward += 8.0 + max(0.0, speed_bonus)
         return float(reward)
 
     def _team_progress_score(self) -> float:
         agent0 = self.agent_positions.get("agent_0", self.start_positions["agent_0"])
         agent1 = self.agent_positions.get("agent_1", self.start_positions["agent_1"])
-        plate_dist = self._manhattan_to_any(agent0, self.pressure_plates)
+        plate_dist = self._shortest_distance(agent0, self.pressure_plates, doors_passable=True)
         key_target = [self.key_pos] if self.key_pos and not self.key_taken else self.goals
-        agent1_dist = self._manhattan_to_any(agent1, key_target)
-        score = -float(plate_dist + agent1_dist)
-        if self.door_open:
-            score += 3.0
-        if self.key_taken:
-            score += 4.0
-        return score
+        agent1_dist = self._shortest_distance(agent1, key_target, doors_passable=True)
+        return -float(plate_dist + agent1_dist)
 
     def _record_frame(self, reward: float, actions: Dict[str, int]) -> None:
         self.trajectory.append(
@@ -330,6 +332,7 @@ class CoopPuzzleEnv:
                 "agents": {k: list(v) for k, v in self.agent_positions.items()},
                 "actions": {k: int(v) for k, v in actions.items()},
                 "door_open": self.door_open,
+                "door_ever_opened": self.door_ever_opened,
                 "key_taken": self.key_taken,
                 "reward": float(reward),
                 "success": self._is_success(),
@@ -354,3 +357,34 @@ class CoopPuzzleEnv:
             return 0
         return min(abs(pos[0] - p[0]) + abs(pos[1] - p[1]) for p in pts)
 
+    def _shortest_distance(
+        self,
+        start: Position,
+        targets: Iterable[Position],
+        doors_passable: bool = False,
+    ) -> int:
+        target_set = set(targets)
+        if not target_set or start in target_set:
+            return 0
+        queue = deque([(start, 0)])
+        seen = {start}
+        while queue:
+            pos, distance = queue.popleft()
+            for action, (dr, dc) in ACTIONS.items():
+                if action == 0:
+                    continue
+                nxt = (pos[0] + dr, pos[1] + dc)
+                if nxt in seen:
+                    continue
+                r, c = nxt
+                if r < 0 or c < 0 or r >= self.height or c >= len(self.level_lines[r]):
+                    continue
+                if nxt in self.walls:
+                    continue
+                if nxt in self.doors and not (doors_passable or self.door_open):
+                    continue
+                if nxt in target_set:
+                    return distance + 1
+                seen.add(nxt)
+                queue.append((nxt, distance + 1))
+        return self.height * self.width

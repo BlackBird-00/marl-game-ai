@@ -25,12 +25,18 @@ class IPPOTrainer:
             for agent in agents
         }
 
-    def act(self, observations: Dict[str, np.ndarray], deterministic: bool = False):
+    def act(
+        self,
+        observations: Dict[str, np.ndarray],
+        deterministic: bool = False,
+        temperature: float = 1.0,
+    ):
         actions, log_probs, values = {}, {}, {}
         with torch.no_grad():
             for agent, obs in observations.items():
                 obs_t = to_tensor(obs, self.config.device).unsqueeze(0)
-                dist = self.models[agent].dist(obs_t)
+                logits = self.models[agent].actor(obs_t) / max(temperature, 1e-6)
+                dist = torch.distributions.Categorical(logits=logits)
                 action = torch.argmax(dist.probs, dim=-1) if deterministic else dist.sample()
                 actions[agent] = int(action.item())
                 log_probs[agent] = float(dist.log_prob(action).item())
@@ -90,6 +96,7 @@ class IPPOTrainer:
         torch.save(
             {
                 "type": "ippo",
+                "version": 3,
                 "agents": self.agents,
                 "models": {agent: model.state_dict() for agent, model in self.models.items()},
             },
@@ -98,6 +105,10 @@ class IPPOTrainer:
 
     def load(self, path: str) -> None:
         ckpt = torch.load(path, map_location=self.config.device)
+        if ckpt.get("version", 1) < 3:
+            raise ValueError(
+                "This IPPO checkpoint uses the old environment or observation format. "
+                "Delete it and retrain with the current code."
+            )
         for agent, state in ckpt["models"].items():
             self.models[agent].load_state_dict(state)
-

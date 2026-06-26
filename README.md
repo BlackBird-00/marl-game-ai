@@ -30,14 +30,14 @@ python -m marl_game_ai.visualizer.pygame_viewer --replay outputs/eval/rule_repla
 
 ```bash
 python -m marl_game_ai.train --algorithm mappo --episodes 300 --out-dir outputs
-python -m marl_game_ai.evaluate --algorithm mappo --model outputs/mappo/mappo.pt --episodes 20 --out-dir outputs/eval
+python -m marl_game_ai.evaluate --algorithm mappo --model outputs/mappo/mappo_best.pt --episodes 20 --stochastic --out-dir outputs/eval
 ```
 
 训练 IPPO：
 
 ```bash
 python -m marl_game_ai.train --algorithm ippo --episodes 300 --out-dir outputs
-python -m marl_game_ai.evaluate --algorithm ippo --model outputs/ippo/ippo.pt --episodes 20 --out-dir outputs/eval
+python -m marl_game_ai.evaluate --algorithm ippo --model outputs/ippo/ippo_best.pt --episodes 20 --stochastic --out-dir outputs/eval
 ```
 
 如果 Windows/Anaconda 环境出现 `torch` DLL 加载错误，随机策略、规则策略和 pygame 回放仍可运行；训练 IPPO/MAPPO 前需要先修复 PyTorch 安装。若遇到 `NumPy 2.x` 与 `matplotlib` 或 `torch` 的兼容报错，先按 `requirements.txt` 安装 `numpy<2`。
@@ -85,6 +85,15 @@ git push -u origin main
 - `training_curve.png`：回报曲线和滑动成功率曲线。
 - `*.pt`：模型权重。
 - `*_replay.json`：可用于 pygame 播放的轨迹。
+
+MAPPO 会同时保存最终模型 `mappo.pt` 和训练期间采样评估表现最好的
+`mappo_best.pt`。模型选择使用固定采样序列下的多局成功率。PPO 学到的是
+概率策略，因此正式评估和演示应优先使用 `mappo_best.pt` 和
+`--stochastic`；不加该参数时会逐状态选择概率最大的动作。
+
+IPPO 同样保存 `ippo.pt` 和 `ippo_best.pt`。由于现在采用明确的合作角色，
+只有 `agent_0`（A）能够触发压力板，只有 `agent_1`（B）能够取得钥匙并
+进入终点。
 
 建议报告中对比：
 

@@ -4,16 +4,17 @@ env:
 
 train:
   episodes: 300
+  rollout_episodes: 4
+  selection_episodes: 5
 
 algorithm:
   gamma: 0.99
   gae_lambda: 0.95
   clip_coef: 0.2
   value_coef: 0.5
-  entropy_coef: 0.01
+  entropy_coef: 0.002
   lr: 0.0003
   update_epochs: 4
   minibatch_size: 256
   hidden_dim: 128
   device: cpu
-

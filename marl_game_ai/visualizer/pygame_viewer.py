@@ -28,6 +28,10 @@ def load_replay(path: str | Path):
 
 def draw(screen, font, frame, cell_size: int, side_width: int) -> None:
     level = [list(row) for row in frame["level"]]
+    for row in level:
+        for c, cell in enumerate(row):
+            if cell in {"A", "B"}:
+                row[c] = "."
     for r, c in frame.get("doors", []):
         level[r][c] = "d" if frame["door_open"] else "D"
     key = frame.get("key")
@@ -84,7 +88,9 @@ def main() -> None:
     side_width = 300
     screen = pygame.display.set_mode((cols * args.cell_size + side_width, rows * args.cell_size))
     pygame.display.set_caption("Cooperative Puzzle MARL Replay")
-    font = pygame.font.SysFont("consolas", 20)
+    # Use pygame's bundled default font. SysFont can fail when the Windows
+    # font registry contains malformed entries.
+    font = pygame.font.Font(None, 24)
     clock = pygame.time.Clock()
     index = 0
     paused = False
@@ -112,4 +118,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

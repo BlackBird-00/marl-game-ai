@@ -33,9 +33,38 @@ def train_ippo(args, env: CoopPuzzleEnv, out_dir: Path, config: PPOConfig):
     trainer = IPPOTrainer(env.obs_dim, env.action_dim, env.possible_agents, config)
     metrics = []
     rng = np.random.default_rng(args.seed)
+    pending_rollouts = {agent: [] for agent in env.possible_agents}
+    last_update_metrics = {}
+    best_score = float("-inf")
+
+    def evaluation_score() -> tuple[float, float]:
+        torch_rng_state = torch.random.get_rng_state()
+        torch.manual_seed(args.seed + 20_000)
+        successes = []
+        returns = []
+        try:
+            for eval_episode in range(args.selection_episodes):
+                eval_env = CoopPuzzleEnv(level=env.level_name, max_steps=env.max_steps, seed=args.seed)
+                eval_obs, _ = eval_env.reset(seed=args.seed + eval_episode)
+                eval_return = 0.0
+                success = False
+                for _ in range(eval_env.max_steps):
+                    eval_actions, _, _ = trainer.act(eval_obs, deterministic=False)
+                    eval_obs, eval_rewards, terminations, truncations, infos = eval_env.step(eval_actions)
+                    eval_return += float(np.mean(list(eval_rewards.values())))
+                    success = any(info["success"] for info in infos.values())
+                    if any(terminations.values()) or any(truncations.values()):
+                        break
+                successes.append(float(success))
+                returns.append(eval_return)
+        finally:
+            torch.random.set_rng_state(torch_rng_state)
+        success_rate = float(np.mean(successes))
+        score = 1000.0 * success_rate + float(np.mean(returns))
+        return score, success_rate
+
     for episode in range(1, args.episodes + 1):
         observations, _ = env.reset(seed=int(rng.integers(1_000_000)))
-        rollouts = {agent: [] for agent in env.possible_agents}
         total_return = 0.0
         success = False
         collisions = 0
@@ -48,7 +77,7 @@ def train_ippo(args, env: CoopPuzzleEnv, out_dir: Path, config: PPOConfig):
             success = success or any(info["success"] for info in infos.values())
             collisions += int(any(info["collision"] for info in infos.values()))
             for agent in env.possible_agents:
-                rollouts[agent].append(
+                pending_rollouts[agent].append(
                     {
                         "obs": observations[agent],
                         "action": actions[agent],
@@ -61,15 +90,26 @@ def train_ippo(args, env: CoopPuzzleEnv, out_dir: Path, config: PPOConfig):
             observations = next_obs
             if done:
                 break
-        update_metrics = trainer.update(rollouts)
+
+        should_update = episode % args.rollout_episodes == 0 or episode == args.episodes
+        evaluation_success_rate = 0.0
+        if should_update:
+            last_update_metrics = trainer.update(pending_rollouts)
+            pending_rollouts = {agent: [] for agent in env.possible_agents}
+            score, evaluation_success_rate = evaluation_score()
+            if score > best_score:
+                best_score = score
+                trainer.save(str(out_dir / "ippo_best.pt"))
+
         row = {
             "episode": episode,
             "return": total_return,
             "success": int(success),
             "steps": env.step_count,
             "collisions": collisions,
+            "evaluation_success_rate": evaluation_success_rate,
         }
-        row.update(update_metrics)
+        row.update(last_update_metrics)
         metrics.append(row)
         if episode % args.log_interval == 0:
             recent = metrics[-args.log_interval :]
@@ -83,9 +123,41 @@ def train_mappo(args, env: CoopPuzzleEnv, out_dir: Path, config: PPOConfig):
     trainer = MAPPOTrainer(env.obs_dim, env.state_dim, env.action_dim, env.possible_agents, config)
     metrics = []
     rng = np.random.default_rng(args.seed)
+    pending_rollout = []
+    last_update_metrics = {}
+    best_score = float("-inf")
+
+    def evaluation_score() -> tuple[float, float]:
+        # PPO learns a stochastic policy. Compare checkpoints with the same
+        # sampling sequence, then restore RNG so evaluation does not alter
+        # subsequent training.
+        torch_rng_state = torch.random.get_rng_state()
+        torch.manual_seed(args.seed + 10_000)
+        successes = []
+        returns = []
+        try:
+            for eval_episode in range(args.selection_episodes):
+                eval_env = CoopPuzzleEnv(level=env.level_name, max_steps=env.max_steps, seed=args.seed)
+                eval_obs, _ = eval_env.reset(seed=args.seed + eval_episode)
+                eval_return = 0.0
+                success = False
+                for _ in range(eval_env.max_steps):
+                    eval_actions, _, _ = trainer.act(eval_obs, eval_env.state(), deterministic=False)
+                    eval_obs, eval_rewards, terminations, truncations, infos = eval_env.step(eval_actions)
+                    eval_return += float(np.mean(list(eval_rewards.values())))
+                    success = any(info["success"] for info in infos.values())
+                    if any(terminations.values()) or any(truncations.values()):
+                        break
+                successes.append(float(success))
+                returns.append(eval_return)
+        finally:
+            torch.random.set_rng_state(torch_rng_state)
+        success_rate = float(np.mean(successes))
+        score = 1000.0 * success_rate + float(np.mean(returns))
+        return score, success_rate
+
     for episode in range(1, args.episodes + 1):
         observations, _ = env.reset(seed=int(rng.integers(1_000_000)))
-        rollout = []
         total_return = 0.0
         success = False
         collisions = 0
@@ -98,30 +170,40 @@ def train_mappo(args, env: CoopPuzzleEnv, out_dir: Path, config: PPOConfig):
             total_return += reward
             success = success or any(info["success"] for info in infos.values())
             collisions += int(any(info["collision"] for info in infos.values()))
-            for agent in env.possible_agents:
-                rollout.append(
-                    {
-                        "obs": observations[agent],
-                        "state": state,
-                        "action": actions[agent],
-                        "log_prob": log_probs[agent],
-                        "value": value,
-                        "reward": reward,
-                        "done": float(done),
-                    }
-                )
+            pending_rollout.append(
+                {
+                    "observations": {agent: observations[agent] for agent in env.possible_agents},
+                    "state": state,
+                    "actions": dict(actions),
+                    "log_probs": dict(log_probs),
+                    "value": value,
+                    "reward": reward,
+                    "done": float(done),
+                }
+            )
             observations = next_obs
             if done:
                 break
-        update_metrics = trainer.update(rollout)
+
+        should_update = episode % args.rollout_episodes == 0 or episode == args.episodes
+        evaluation_success_rate = 0.0
+        if should_update:
+            last_update_metrics = trainer.update(pending_rollout)
+            pending_rollout = []
+            score, evaluation_success_rate = evaluation_score()
+            if score > best_score:
+                best_score = score
+                trainer.save(str(out_dir / "mappo_best.pt"))
+
         row = {
             "episode": episode,
             "return": total_return,
             "success": int(success),
             "steps": env.step_count,
             "collisions": collisions,
+            "evaluation_success_rate": evaluation_success_rate,
         }
-        row.update(update_metrics)
+        row.update(last_update_metrics)
         metrics.append(row)
         if episode % args.log_interval == 0:
             recent = metrics[-args.log_interval :]
@@ -147,6 +229,8 @@ def main() -> None:
     train_config = raw_config.get("train", {})
     algo_config = raw_config.get("algorithm", {})
     args.episodes = args.episodes or int(train_config.get("episodes", 300))
+    args.rollout_episodes = int(train_config.get("rollout_episodes", 4))
+    args.selection_episodes = int(train_config.get("selection_episodes", 5))
     args.max_steps = int(env_config.get("max_steps", 120))
     level = args.level or env_config.get("level", "basic")
     torch.manual_seed(args.seed)
@@ -167,4 +251,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
